@@ -1,0 +1,30 @@
+# Исключаем виртуальную среду
+venv/
+.env/
+*.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Кеши Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Файлы зависимостей
+*.log
+
+# Конфигурационные файлы IDE
+.vscode/
+.idea/
+*.iml
+*.sh
+
+# Конфиденциальные данные (если есть)
+*.env
+config.json
+secrets.json
+
+# Файлы операционной системы
+.DS_Store
+Thumbs.db

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+        const API_BASE_URL = "{{ backend_url }}";  // Ensure this variable is passed from Flask
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Chat Assistant</h1>
+        
+        <div class="controls">
+            <button onclick="createThread()">Create New Thread</button>
+            <button onclick="updateSystemPrompt()">Update System Prompt</button>
+        </div>
+
+        <div id="chat-container">
+            <div id="messages"></div>
+            <div class="input-area">
+                <input type="text" id="message-input" placeholder="Type your message..." 
+                       onkeypress="if(event.keyCode === 13) sendMessage()">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
