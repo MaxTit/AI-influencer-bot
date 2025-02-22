@@ -125,30 +125,3 @@ class OpenAIService:
         """Get last message in thread."""
         history = self.get_chat_history(thread_id)
         return history[-1] if history else {}
-
-    def get_system_prompt(self) -> str:
-        """Get current system prompt from assistant."""
-        assistant = self.client.beta.assistants.retrieve(assistant_id=ASSISTANT_ID)
-        return assistant.instructions
-
-    def update_instruction_file(self, text: str) -> None:
-        """Append new instructions to file."""
-        file_path = "instructions.txt"
-        with open(file_path, "a", encoding="utf-8") as file:
-            file.write(f"\n\n# Update: {text}")
-
-    def update_system_prompt(self) -> str:  # Fixed method name
-        """Update assistant instructions from file."""
-        file_path = "instructions.txt"
-        try:
-            with open(file_path, "r", encoding="utf-8") as file:
-                content = file.read()
-
-            assistant = self.client.beta.assistants.update(
-                assistant_id=ASSISTANT_ID,
-                instructions=content
-            )
-            return assistant.instructions
-        except Exception as e:
-            print(f"Error updating system prompt: {e}")
-            return ""

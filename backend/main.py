@@ -69,17 +69,5 @@ async def process_assistant_feetback(request: dict):
         return openai_service.process_assistant_feetback(thread_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-@app.get('/system-promt')
-async def get_system_promt():
-    try:
-        return openai_service.get_system_prompt()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/update-system-promt")
-async def update_sustem_promt():
-    instruction = openai_service.update_system_promt()
-    return instruction
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

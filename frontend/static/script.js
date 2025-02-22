@@ -105,25 +105,6 @@ function displayMessages(messages) {
         addMessage(msg.content, msg.role);
     });
 }
-
-async function updateSystemPrompt() {
-    try {
-        const response = await fetch(`${API_BASE_URL}/update-system-prompt`, {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        alert('System prompt updated: ' + data.instruction);
-    } catch (error) {
-        console.error('Error updating system prompt:', error);
-        alert('Failed to update system prompt. Check console for details.');
-    }
-}
-
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
     // Handle Enter key in message input
