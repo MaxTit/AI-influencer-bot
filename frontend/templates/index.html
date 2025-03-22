@@ -4,7 +4,11 @@
     <title>Chat Assistant</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script>
-        const API_BASE_URL = "{{ backend_url }}";  // Ensure this variable is passed from Flask
+        const API_BASE_URL = "{{ backend_url }}";
+        
+        // URL до вашей таблицы users в Firebase 
+        // (добавим .json, чтобы получить объект JSON через REST API):
+        const FIREBASE_USERS_URL = "https://relationship-with-iryn-default-rtdb.firebaseio.com/users.json";
     </script>
 </head>
 <body>
@@ -12,15 +16,41 @@
         <h1>Chat Assistant</h1>
         
         <div class="controls">
-            <button onclick="createThread()">Create New Thread</button>
+            <!-- <button onclick="createThread()">Create New Thread</button> -->
+            <a href="{{ url_for('logout') }}"><button>Выйти</button></a>
         </div>
 
-        <div id="chat-container">
-            <div id="messages"></div>
-            <div class="input-area">
-                <input type="text" id="message-input" placeholder="Type your message..." 
-                       onkeypress="if(event.keyCode === 13) sendMessage()">
-                <button onclick="sendMessage()">Send</button>
+        <!-- Основная разметка страницы -->
+        <div id="main-layout">
+            <!-- Левая панель со списком пользователей -->
+            <div id="user-list" class="user-list-panel">
+                <!-- Сюда будем динамически подгружать список пользователей -->
+            </div>
+
+            <!-- Правая часть: сам чат -->
+            <div id="chat-container">
+                <!-- Верхняя полоса чата с аватаром, именем и датами -->
+                <div id="chat-header">
+                    <img id="user-avatar" src="" alt="User Avatar" class="avatar" />
+                    <div>
+                        <!-- Имя пользователя -->
+                        <div id="user-name" class="user-name"></div>
+                        <!-- Дополнительная информация: lastMessage / registration -->
+                        <div id="user-dates" class="user-info">
+                            <span>Last Message: <span id="user-last-message"></span></span><br>
+                            <span>Registered: <span id="user-reg-date"></span></span>
+                        </div>
+                    </div>
+                </div>
+                
+                
+                <div id="messages"></div>
+                
+               <!-- <div class="input-area">
+                    <input type="text" id="message-input" placeholder="Type your message..." 
+                           onkeypress="if(event.keyCode === 13) sendMessage()">
+                    <button onclick="sendMessage()">Send</button>
+                </div> -->
             </div>
         </div>
     </div>
