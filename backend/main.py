@@ -1,14 +1,18 @@
+# main.py
 from typing import Dict
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import uvicorn
-from openai_service import OpenAIService
 
-from fastapi.middleware.cors import CORSMiddleware  # Add this import
+from openai_service import OpenAIService
+from fastapi.middleware.cors import CORSMiddleware
+
+# Наш новый сервис планирования, использующий Cloud Tasks
+from scheduler_service import SchedulerService
 
 app = FastAPI()
 
-# Add CORS middleware
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,8 +25,27 @@ class MessageInput(BaseModel):
     thread_id: str
     message: str
 
+class ScheduleRequest(BaseModel):
+    userId: str
+    timeAnswer: int
+
 openai_service = OpenAIService()
 
+# Инициализируем SchedulerService
+# Значения project_id, queue_id, location, callback_url вы должны указать сами
+PROJECT_ID = "ai-influencer-bot-73"
+QUEUE_ID = "ai-answer"
+LOCATION = "us-central1"
+# В callback_url указывайте URL вашего Cloud Run (или другой хост), заканчивающийся на /tasks/answer-job
+CALLBACK_URL = "https://ai-influencer-bot-backend-702470178997.us-central1.run.app/tasks/answer-job"
+
+scheduler_service = SchedulerService(
+    openai_service=openai_service,
+    project_id=PROJECT_ID,
+    queue_id=QUEUE_ID,
+    location=LOCATION,
+    callback_url=CALLBACK_URL
+)
 
 @app.get("/network-check")
 async def network_check():
@@ -38,7 +61,7 @@ async def network_check():
 async def create_thread():
     """Создаёт тред и возвращает его ID."""
     try:
-        thread_id = openai_service.create_thread()  # Убрали await
+        thread_id = openai_service.create_thread()
         return {"thread_id": thread_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -69,5 +92,51 @@ async def process_assistant_feetback(request: dict):
         return openai_service.process_assistant_feetback(thread_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===============================
+#       НОВЫЕ РОУТЫ
+# ===============================
+
+@app.post("/schedule-answer")
+async def schedule_answer(data: ScheduleRequest):
+    """
+    Принимает { "userId": ..., "timeAnswer": ... },
+    создаёт задачу в Cloud Tasks, которая через timeAnswer секунд
+    сделает POST на /tasks/answer-job
+    """
+    try:
+        task_name = scheduler_service.schedule_answer(
+            user_id=data.userId,
+            time_answer=data.timeAnswer
+        )
+        return {"status": "ok", "taskName": task_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tasks/answer-job")
+async def answer_job(request: Request):
+    """
+    Этот эндпойнт вызывается Cloud Tasks через POST запрос.
+    Тело запроса содержит JSON: {"userId": "..."}.
+    Здесь вызываем scheduler_service.run_answer_job(userId).
+    """
+    # В реальном проекте необходимо проверять заголовки 
+    # 'X-CloudTasks-...' и аутентификацию, чтобы этот эндпойнт 
+    # не был доступен извне!
+    data = await request.json()
+    user_id = data.get("userId")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Missing userId in task payload")
+    
+    # Запускаем логику
+    try:
+        scheduler_service.run_answer_job(user_id)
+        return {"status": "done"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
