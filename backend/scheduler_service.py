@@ -7,6 +7,8 @@ import datetime
 import requests
 from typing import Dict, Optional
 from google.cloud import tasks_v2  # pip install google-cloud-tasks
+from google.api_core.exceptions import AlreadyExists, NotFound
+from google.protobuf import field_mask_pb2
 
 from openai_service import OpenAIService
 
@@ -36,24 +38,23 @@ class SchedulerService:
         self.firebase_base_url = "https://relationship-with-iryn-default-rtdb.firebaseio.com"
 
     def schedule_answer(self, user_id: str, time_answer: int) -> str:
-        """
-        Запланировать в Cloud Tasks, чтобы через time_answer секунд
-        был сделан POST-запрос на callback_url с {"userId": user_id}.
-        Возвращает имя созданной задачи (task_name).
-        """
         # Путь к очереди
         parent = self.client.queue_path(self.project_id, self.location, self.queue_id)
 
-        # Тело, которое придёт в запрос на /tasks/answer-job
+        # Сформируем уникальное имя задачи. 
+        # user-{user_id}, чтобы была одна задача на каждого userId.
+        task_id = f"user-{user_id}"
+        # Полное имя (resource name) задачи
+        task_name = self.client.task_path(self.project_id, self.location, self.queue_id, task_id)
+
         payload_data = {"userId": user_id}
         payload_bytes = json.dumps(payload_data).encode("utf-8")
 
-        # Время запуска задачи (UTC). Сейчас + time_answer секунд
         schedule_time = datetime.datetime.utcnow() + datetime.timedelta(seconds=time_answer)
-        # Указываем явно, что это TZ-aware UTC
         schedule_time = schedule_time.replace(tzinfo=datetime.timezone.utc)
 
         task = {
+            "name": task_name,  # <-- Явно указываем имя
             "http_request": {
                 "http_method": tasks_v2.HttpMethod.POST,
                 "url": self.callback_url,
@@ -63,9 +64,13 @@ class SchedulerService:
             "schedule_time": schedule_time,
         }
 
-        # Создаём задачу в Cloud Tasks
-        response = self.client.create_task(parent=parent, task=task)
-        return response.name
+        try:
+            response = self.client.create_task(parent=parent, task=task)
+            return response.name
+        except AlreadyExists:
+            # Если задача с таким именем уже существует
+            print(f"Task for userId={user_id} is already scheduled.")
+            raise ValueError(f"Task for userId={user_id} is already scheduled.")
 
     def run_answer_job(self, user_id: str):
         """
@@ -85,13 +90,18 @@ class SchedulerService:
             print("No messages found in /Messages or all answered.")
             return
 
-        pending_msgs = [m for m in messages_data if m.get("isAnswer") == False]
+        pending_msgs = sorted(
+            (m for m in messages_data if m.get("isAnswer") == False),
+            key=lambda x: x.get("dateSend", 0)
+        )
         if not pending_msgs:
             print("No messages with isAnswer=false.")
             return
 
         # 2. Собираем текст
-        combined_text = "\n".join(msg["message"] for msg in pending_msgs)
+        # Markdown-цитаты
+        combined_text = "\n\n".join(f"> {msg['message']}" for msg in pending_msgs)
+
 
         # 3. Получаем aiTreadId
         ai_thread_id = self.fetch_user_ai_thread_id(user_id)
