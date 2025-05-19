@@ -36,6 +36,7 @@ class SchedulerService:
 
         self.client = tasks_v2.CloudTasksClient()
         self.firebase_base_url = "https://relationship-with-iryn-default-rtdb.firebaseio.com"
+        self.webhook_tg_bot_url = "https://ai-influencer-tg-bot-702470178997.us-central1.run.app/answer"
 
     def schedule_answer(self, user_id: str, time_answer: int) -> str:
         """
@@ -157,7 +158,38 @@ class SchedulerService:
 
         self.delete_user_task(user_id)
 
+        # 7. Отправляем ответ в Telegram
+        if user_id.startswith("tg_"):
+            self.send_answer_to_telegram(user_id, assistant_message)
+
         print(f"Job completed for userId={user_id}")
+
+    def send_answer_to_telegram(self, user_id: str, message: str):
+        """
+        Sends the assistant's response message to the Telegram bot webhook.
+        
+        Args:
+            user_id (str): The Telegram user ID to send the message to
+            message (str): The message text to send
+        """
+        payload = {
+            "user_id": user_id,
+            "message": message
+        }
+        
+        try:
+            response = requests.post(
+                self.webhook_tg_bot_url,
+                params=payload
+            )
+            
+            if response.status_code >= 300:
+                print(f"[send_answer_to_telegram] Error sending message to Telegram. Status: {response.status_code}, Response: {response.text}")
+            else:
+                print(f"[send_answer_to_telegram] Successfully sent message to user {user_id}")
+                
+        except Exception as e:
+            print(f"[send_answer_to_telegram] Exception while sending message: {str(e)}")
 
     # --- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ---
 
