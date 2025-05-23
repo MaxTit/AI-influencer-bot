@@ -5,11 +5,15 @@ import json
 import time
 import datetime
 import requests
+import base64
 from typing import Dict, Optional
 from google.cloud import tasks_v2  # pip install google-cloud-tasks
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.protobuf import field_mask_pb2
-
+from urllib.parse import quote, unquote
+from google.cloud import storage
+import re
+import logging
 from openai_service import OpenAIService
 
 class SchedulerService:
@@ -33,6 +37,8 @@ class SchedulerService:
         self.queue_id = queue_id
         self.location = location
         self.callback_url = callback_url
+        
+        logging.basicConfig(level=logging.INFO)
 
         self.client = tasks_v2.CloudTasksClient()
         self.firebase_base_url = "https://relationship-with-iryn-default-rtdb.firebaseio.com"
@@ -58,7 +64,8 @@ class SchedulerService:
             #        pass  # Задача не существует, значит поле устарело
             #
             # Но если мы просто считаем, что наличие taskName -> "уже запланировано", то:
-            raise ValueError(f"User {user_id} already has a scheduled task: {existing_task_name}")
+            logging.info(f"User {user_id} already has a scheduled task: {existing_task_name}")
+            return existing_task_name
 
         # 2. Создаём новую задачу
         parent = self.client.queue_path(self.project_id, self.location, self.queue_id)
@@ -118,13 +125,16 @@ class SchedulerService:
         4. Отправляет в OpenAI -> получает ответ.
         5. Записывает ответ в /Messages как isAnswer=true, isBot=true.
         6. Все старые сообщения isAnswer=false -> true.
+        7. Удаляет изображения из Cloud Storage.
+        8. Удаляет задачу из Cloud Tasks.
+        9. Отправляет ответ в Telegram.
         """
-        print(f"[run_answer_job] for userId={user_id}")
+        logging.info(f"[run_answer_job] for userId={user_id}")
 
         # 1. Собираем сообщения
         messages_data = self.fetch_user_messages(user_id)
         if not messages_data:
-            print("No messages found in /Messages or all answered.")
+            logging.info("No messages found in /Messages or all answered.")
             return
 
         pending_msgs = sorted(
@@ -132,37 +142,49 @@ class SchedulerService:
             key=lambda x: x.get("dateSend", 0)
         )
         if not pending_msgs:
-            print("No messages with isAnswer=false.")
+            logging.info("No messages with isAnswer=false.")
             return
 
         # 2. Собираем текст
         # Markdown-цитаты
         combined_text = "\n\n".join(f"> {msg['message']}" for msg in pending_msgs)
-
+        image_urls = [msg.get("pictureUrl") for msg in pending_msgs if msg.get("pictureUrl")]
 
         # 3. Получаем aiTreadId
+        logging.info(f"[run_answer_job] Fetching aiTreadId for userId={user_id}")
         ai_thread_id = self.fetch_user_ai_thread_id(user_id)
         if not ai_thread_id:
-            print(f"No aiTreadId found for userId={user_id}")
+            logging.info(f"No aiTreadId found for userId={user_id}")
             return
-
+        
         # 4. Отправляем запрос в OpenAI
-        response = self.openai_service.send_prompt(ai_thread_id, combined_text)
+        logging.info(f"[run_answer_job] Sending prompt to OpenAI with {len(image_urls)} images")
+        if len(image_urls) > 0:
+            response = self.openai_service.send_prompt_with_images(ai_thread_id, combined_text, image_urls)
+        else:
+            response = self.openai_service.send_prompt(ai_thread_id, combined_text)
         assistant_message = response.get("message", "No response")
 
         # 5. Записываем ответ
+        logging.info(f"[run_answer_job] Storing bot message for userId={user_id}")
         self.store_bot_message(user_id, assistant_message)
 
         # 6. Помечаем старые сообщения как isAnswer=true
+        logging.info(f"[run_answer_job] Marking messages as answered for userId={user_id}")
         self.mark_messages_answered(pending_msgs)
 
+        #logging.info(f"[run_answer_job] Deleting images for userId={user_id}")
+        #self.delete_images(image_urls)
+
+        logging.info(f"[run_answer_job] Deleting user task for userId={user_id}")
         self.delete_user_task(user_id)
 
         # 7. Отправляем ответ в Telegram
         if user_id.startswith("tg_"):
+            logging.info(f"[run_answer_job] Sending answer to Telegram for userId={user_id}")
             self.send_answer_to_telegram(user_id, assistant_message)
 
-        print(f"Job completed for userId={user_id}")
+        logging.info(f"Job completed for userId={user_id}")
 
     def send_answer_to_telegram(self, user_id: str, message: str):
         """
@@ -289,3 +311,90 @@ class SchedulerService:
                 resp = requests.patch(patch_url, json=payload)
                 if resp.status_code >= 300:
                     print(f"[mark_messages_answered] Error for {firebase_key}:", resp.text)
+
+    def url_to_base64(self, image_url):
+        try:
+            # Handle case where image_url is passed as a list
+            if isinstance(image_url, list) and len(image_url) > 0:
+                image_url = image_url[0]
+
+            # Remove leading '@' if present
+            if isinstance(image_url, str) and image_url.startswith('@'):
+                image_url = image_url[1:]
+
+            # Handle Firebase Storage gs:// URLs
+            if isinstance(image_url, str) and image_url.startswith('gs://'):
+                parts = image_url[5:].split('/', 1)
+                bucket = parts[0].replace('.firebasestorage.app', '.appspot.com')
+                object_path = parts[1]
+                object_path_enc = quote(object_path, safe='')
+                image_url = f"https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{object_path_enc}?alt=media"
+                print(f"[url_to_base64] Converted gs:// to: {image_url}")
+
+            # If it's already a direct Firebase Storage URL, use as is
+            # (no conversion needed)
+
+            response = requests.get(image_url)
+            if response.status_code == 200:
+                return base64.b64encode(response.content).decode('utf-8')
+            else:
+                print(f"[url_to_base64] Failed to download image. Status: {response.status_code}, URL: {image_url}")
+                print(f"[url_to_base64] Response: {response.text}")
+                return None
+        except Exception as e:
+            print(f"[url_to_base64] Exception for {image_url}: {str(e)}")
+            return None
+
+    def delete_images(self, image_urls):
+        """
+        Deletes images from Google Cloud Storage given a list of gs:// or public Firebase Storage URLs.
+        """
+        storage_client = storage.Client()
+        for url in image_urls:
+            # If url is a list, get the first element
+            if isinstance(url, list) and len(url) > 0:
+                url = url[0]
+            # Handle @ prefix
+            if isinstance(url, str) and url.startswith('@'):
+                url = url[1:]
+            # gs:// URL
+            if isinstance(url, str) and url.startswith('gs://'):
+                parts = url[5:].split('/', 1)
+                bucket_name = parts[0]
+                blob_name = parts[1]
+            # Public Firebase Storage URL with firebasestorage.googleapis.com
+            elif isinstance(url, str) and 'firebasestorage.googleapis.com' in url:
+                match = re.search(r'/b/([^/]+)/o/([^?]+)', url)
+                if match:
+                    bucket_name = match.group(1)
+                    blob_name = unquote(match.group(2))
+                else:
+                    print(f"[delete_images] Could not parse public URL: {url}")
+                    continue
+            # storage.googleapis.com URL format
+            elif isinstance(url, str) and 'storage.googleapis.com' in url:
+                # Extract bucket and path from URL like:
+                # https://storage.googleapis.com/relationship-with-iryn.firebasestorage.app/348409461/...
+                parts = url.split('storage.googleapis.com/', 1)
+                if len(parts) == 2:
+                    bucket_path = parts[1].split('/', 1)
+                    if len(bucket_path) == 2:
+                        bucket_name = bucket_path[0]
+                        blob_name = bucket_path[1]
+                    else:
+                        print(f"[delete_images] Could not parse storage.googleapis.com URL path: {url}")
+                        continue
+                else:
+                    print(f"[delete_images] Could not parse storage.googleapis.com URL: {url}")
+                    continue
+            else:
+                print(f"[delete_images] Skipped non-gs/non-public URL: {url}")
+                continue
+            # Try to delete
+            try:
+                bucket = storage_client.bucket(bucket_name)
+                blob = bucket.blob(blob_name)
+                blob.delete()
+                print(f"[delete_images] Deleted: {url}")
+            except Exception as e:
+                print(f"[delete_images] Failed to delete {url}: {e}")

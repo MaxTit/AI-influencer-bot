@@ -3,6 +3,7 @@ from typing import Dict
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import uvicorn
+import traceback
 
 from openai_service import OpenAIService
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,7 +35,7 @@ openai_service = OpenAIService()
 # Инициализируем SchedulerService
 # Значения project_id, queue_id, location, callback_url вы должны указать сами
 PROJECT_ID = "ai-influencer-bot-73"
-QUEUE_ID = "ai-answer"
+QUEUE_ID = "answer-ai"
 LOCATION = "us-central1"
 # В callback_url указывайте URL вашего Cloud Run (или другой хост), заканчивающийся на /tasks/answer-job
 CALLBACK_URL = "https://ai-influencer-bot-backend-702470178997.us-central1.run.app/tasks/answer-job"
@@ -100,18 +101,17 @@ async def process_assistant_feetback(request: dict):
 
 @app.post("/schedule-answer")
 async def schedule_answer(data: ScheduleRequest):
-    """
-    Принимает { "userId": ..., "timeAnswer": ... },
-    создаёт задачу в Cloud Tasks, которая через timeAnswer секунд
-    сделает POST на /tasks/answer-job
-    """
     try:
+        print(f"[schedule-answer] Received: {data}")
         task_name = scheduler_service.schedule_answer(
             user_id=data.userId,
             time_answer=data.timeAnswer
         )
+        print(f"[schedule-answer] Task created: {task_name}")
         return {"status": "ok", "taskName": task_name}
     except Exception as e:
+        print(f"[schedule-answer] Exception: {e}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -135,6 +135,9 @@ async def answer_job(request: Request):
         scheduler_service.run_answer_job(user_id)
         return {"status": "done"}
     except Exception as e:
+        print(f"[answer_job] Exception for userId={user_id}: {e}")
+        print(traceback.format_exc())
+        print(f"[answer_job] Incoming payload: {data}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

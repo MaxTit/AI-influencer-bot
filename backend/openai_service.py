@@ -1,6 +1,7 @@
 import os
 import openai
 import logging
+import time
 from dotenv import load_dotenv
 from typing import List, Dict
 from fastapi import HTTPException
@@ -67,13 +68,66 @@ class OpenAIService:
                 thread_id=thread_id,
                 run_id=run.id
             )
+            logging.info(f"Run status-text: {run_status.status}")
             if run_status.status == "completed":
                 break
-
+            if run_status.status == "failed":
+                logging.error(f"Run failed: {run_status.last_error}")
+                return {"message_id": run.id, "message": "Failed response"}
+            time.sleep(1)
         # Get assistant response
         messages = self.client.beta.threads.messages.list(thread_id=thread_id)
         assistant_response = self._parse_assistant_response(messages)
         
+        return {"message_id": run.id, "message": assistant_response}
+
+    def send_prompt_with_images(self, thread_id: str, message: str, image_urls: list) -> dict:
+        """
+        Send a message and images to the assistant and get a response.
+        Images are sent as public HTTP(S) URLs in the content blocks.
+        """
+        # Build content blocks: first the text, then each image
+        content_blocks = [{"type": "text", "text": message}]
+        for url in image_urls:
+            # Ensure url is a string, not a list
+            if isinstance(url, list) and len(url) > 0:
+                url = url[0]
+            content_blocks.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": url  # This must be a string!
+                }
+            })
+
+        # Add user message and images to thread
+        self.client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=content_blocks
+        )
+
+        # Create and monitor run
+        run = self.client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=ASSISTANT_ID
+        )
+
+        while True:
+            run_status = self.client.beta.threads.runs.retrieve(
+                thread_id=thread_id,
+                run_id=run.id
+            )
+            logging.info(f"Run status-images: {run_status.status}")
+            if run_status.status == "completed":
+                break
+            if run_status.status == "failed":
+                logging.error(f"Run failed: {run_status.last_error}")
+                return {"message_id": run.id, "message": "Failed response"}
+            time.sleep(1)
+
+        # Get assistant response
+        messages = self.client.beta.threads.messages.list(thread_id=thread_id)
+        assistant_response = self._parse_assistant_response(messages)
         return {"message_id": run.id, "message": assistant_response}
 
     def _parse_assistant_response(self, messages) -> str:
